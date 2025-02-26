@@ -1,6 +1,5 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-use std::os::unix::fs::PermissionsExt;
 
 enum Command {
     BulitinCommand(BulitinCommand),
@@ -99,22 +98,10 @@ fn search_command(command: &str) -> Option<Command> {
     }
 
     // Then check if it's an executable in PATH
-    if let Ok(path_var) = std::env::var("PATH") {
-        for path in path_var.split(':') {
-            let command_path = format!("{}/{}", path, command);
-            let path = std::path::Path::new(&command_path);
-
-            // Check if file exists, is a file, and is executable
-            if path.exists() && path.is_file() {
-                if let Ok(metadata) = path.metadata() {
-                    if metadata.permissions().mode() & 0o111 != 0 {
-                        return Some(Command::ExecutableCommand(ExecutableCommand {
-                            path: command_path,
-                        }));
-                    }
-                }
-            }
-        }
+    if let Some(exec) = pathsearch::find_executable_in_path(command) {
+        return Some(Command::ExecutableCommand(ExecutableCommand {
+            path: exec.display().to_string(),
+        }));
     }
 
     None
