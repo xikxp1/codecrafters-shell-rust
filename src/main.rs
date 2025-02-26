@@ -99,7 +99,7 @@ fn cd_fn(args: &[&str]) {
         println!("cd: too many arguments");
         return;
     }
-    let new_dir = if args.is_empty() {
+    let new_dir = if args.is_empty() || args[0] == "~" {
         std::env::var("HOME")
     } else {
         Ok(args[0].to_string())
