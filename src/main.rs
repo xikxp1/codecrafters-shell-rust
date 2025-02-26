@@ -2,11 +2,11 @@
 use std::io::{self, Write};
 
 enum Command {
-    BulitinCommand(BulitinCommand),
+    BuiltinCommand(BuiltinCommand),
     ExecutableCommand(ExecutableCommand),
 }
 
-enum BulitinCommand {
+enum BuiltinCommand {
     Exit,
     Echo,
     Type,
@@ -14,7 +14,7 @@ enum BulitinCommand {
     Cd,
 }
 
-impl BulitinCommand {
+impl BuiltinCommand {
     fn from_str(command: &str) -> Option<Self> {
         match command {
             "exit" => Some(Self::Exit),
@@ -69,7 +69,7 @@ fn type_fn(args: &[&str]) {
     }
     let command = search_command(args[0]);
     match command {
-        Some(Command::BulitinCommand(_)) => {
+        Some(Command::BuiltinCommand(_)) => {
             println!("{} is a shell builtin", args[0]);
         }
         Some(Command::ExecutableCommand(executable)) => {
@@ -117,8 +117,8 @@ fn cd_fn(args: &[&str]) {
 
 fn search_command(command: &str) -> Option<Command> {
     // First check if it's a builtin command
-    if let Some(builtin) = BulitinCommand::from_str(command) {
-        return Some(Command::BulitinCommand(builtin));
+    if let Some(builtin) = BuiltinCommand::from_str(command) {
+        return Some(Command::BuiltinCommand(builtin));
     }
 
     // Then check if it's an executable in PATH
@@ -139,30 +139,43 @@ fn main() {
         // Wait for user input
         let stdin = io::stdin();
         let mut input = String::new();
-        stdin.read_line(&mut input).unwrap();
+        let readl_line = stdin.read_line(&mut input);
+        if readl_line.is_err() {
+            eprintln!("Error reading input: {}", readl_line.err().unwrap());
+            continue;
+        }
         let input_string = input.trim();
-        let tokens = input_string.split_whitespace().collect::<Vec<&str>>();
+        let tokenizer_result = shell_words::split(input_string);
+        if tokenizer_result.is_err() {
+            eprintln!("Error parsing input: {}", tokenizer_result.err().unwrap());
+            continue;
+        }
+        let tokens = tokenizer_result.unwrap();
         if tokens.is_empty() {
             continue;
         }
 
-        let command_str = tokens[0];
-        let args_str = &tokens[1..];
+        let command_str = tokens[0].as_str();
+        let args = tokens[1..]
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<&str>>();
+        let args_str = args.as_slice();
 
         match search_command(command_str) {
-            Some(Command::BulitinCommand(builtin)) => {
+            Some(Command::BuiltinCommand(builtin)) => {
                 let command_fn = builtin.to_impl();
                 command_fn(args_str);
             }
             Some(Command::ExecutableCommand(_)) => {
-                let command = std::process::Command::new(command_str)
+                if std::process::Command::new(command_str)
                     .args(args_str)
-                    .spawn();
-                if command.is_err() {
+                    .spawn()
+                    .and_then(|mut child| child.wait())
+                    .is_err()
+                {
                     println!("{}: command not found", command_str);
-                    continue;
                 }
-                let _ = command.unwrap().wait();
             }
             None => {
                 println!("{}: command not found", command_str);
