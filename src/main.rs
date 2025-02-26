@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
+use std::{fs::File, path::Path};
 
 enum Command {
     BuiltinCommand(BuiltinCommand),
@@ -14,6 +15,36 @@ enum BuiltinCommand {
     Cd,
 }
 
+#[derive(Clone, Debug)]
+struct OutputLine {
+    line: String,
+    is_err: bool,
+}
+
+#[derive(Debug)]
+struct Output(Vec<OutputLine>);
+
+impl Output {
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    fn add(&mut self, line: &str, is_err: bool) {
+        self.0.push(OutputLine {
+            line: line.to_string(),
+            is_err,
+        });
+    }
+
+    fn get(&self) -> Vec<OutputLine> {
+        self.0.clone()
+    }
+
+    fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
 impl BuiltinCommand {
     fn from_str(command: &str) -> Option<Self> {
         match command {
@@ -26,7 +57,7 @@ impl BuiltinCommand {
         }
     }
 
-    fn to_impl(&self) -> fn(&[&str]) {
+    fn to_impl(&self) -> fn(&[&str], &mut Output) {
         match self {
             Self::Exit => exit_fn,
             Self::Echo => echo_fn,
@@ -41,9 +72,9 @@ struct ExecutableCommand {
     path: String,
 }
 
-fn exit_fn(args: &[&str]) {
+fn exit_fn(args: &[&str], output: &mut Output) {
     if args.len() > 1 {
-        println!("exit: too many arguments");
+        output.add("exit: too many arguments", true);
         return;
     }
     let exit_code = if !args.is_empty() {
@@ -54,64 +85,64 @@ fn exit_fn(args: &[&str]) {
     std::process::exit(exit_code);
 }
 
-fn echo_fn(args: &[&str]) {
-    println!("{}", args.join(" "));
+fn echo_fn(args: &[&str], output: &mut Output) {
+    output.add(&args.join(" "), false);
 }
 
-fn type_fn(args: &[&str]) {
+fn type_fn(args: &[&str], output: &mut Output) {
     if args.is_empty() {
-        println!("type: missing argument");
+        output.add("type: missing argument", true);
         return;
     }
     if args.len() > 1 {
-        println!("type: too many arguments");
+        output.add("type: too many arguments", true);
         return;
     }
     let command = search_command(args[0]);
     match command {
         Some(Command::BuiltinCommand(_)) => {
-            println!("{} is a shell builtin", args[0]);
+            output.add(&format!("{} is a shell builtin", args[0]), false);
         }
         Some(Command::ExecutableCommand(executable)) => {
-            println!("{} is {}", args[0], executable.path);
+            output.add(&format!("{} is {}", args[0], executable.path), false);
         }
         None => {
-            println!("{}: not found", args[0]);
+            output.add(&format!("{}: not found", args[0]), true);
         }
     }
 }
 
-fn pwd_fn(args: &[&str]) {
+fn pwd_fn(args: &[&str], output: &mut Output) {
     if !args.is_empty() {
-        println!("pwd: too many arguments");
+        output.add("pwd: too many arguments", true);
         return;
     }
     let current_dir = std::env::current_dir();
     if current_dir.is_err() {
-        println!("pwd: unable to get current directory");
+        output.add("pwd: unable to get current directory", true);
         return;
     }
-    println!("{}", current_dir.unwrap().display());
+    output.add(&current_dir.unwrap().display().to_string(), false);
 }
 
-fn cd_fn(args: &[&str]) {
+fn cd_fn(args: &[&str], output: &mut Output) {
     if args.len() > 1 {
-        println!("cd: too many arguments");
+        output.add("cd: too many arguments", true);
         return;
     }
-    let new_dir = if args.is_empty() || args[0] == "~" {
+    let new_dir = if args[0] == "~" {
         std::env::var("HOME")
     } else {
         Ok(args[0].to_string())
     };
     if new_dir.is_err() {
-        println!("cd: unable to get home directory");
+        output.add("cd: unable to get home directory", true);
         return;
     }
     let new_dir = new_dir.unwrap();
-    let result = std::env::set_current_dir(&new_dir);
-    if result.is_err() {
-        println!("cd: {}: No such file or directory", new_dir);
+    let cd_result = std::env::set_current_dir(&new_dir);
+    if cd_result.is_err() {
+        output.add(&format!("cd: {}: No such file or directory", new_dir), true);
     }
 }
 
@@ -129,6 +160,56 @@ fn search_command(command: &str) -> Option<Command> {
     }
 
     None
+}
+
+#[derive(Debug)]
+struct TokenizerResult {
+    command: String,
+    args: Vec<String>,
+    redirect_stdout: Option<String>,
+    redirect_stderr: Option<String>,
+}
+
+fn handle_tokens(tokens: Vec<String>) -> Option<TokenizerResult> {
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let command_str = tokens[0].as_str();
+    let mut result = TokenizerResult {
+        command: command_str.to_string(),
+        args: Vec::new(),
+        redirect_stdout: None,
+        redirect_stderr: None,
+    };
+
+    let mut i = 1;
+    while i < tokens.len() {
+        match tokens[i].as_str() {
+            ">" | "1>" => {
+                if i + 1 >= tokens.len() {
+                    eprintln!("syntax error: missing file name after redirection operator");
+                    return None;
+                }
+                result.redirect_stdout = Some(tokens[i + 1].to_string());
+                i += 2;
+            }
+            "2>" => {
+                if i + 1 >= tokens.len() {
+                    eprintln!("syntax error: missing file name after redirection operator");
+                    return None;
+                }
+                result.redirect_stderr = Some(tokens[i + 1].to_string());
+                i += 2;
+            }
+            arg => {
+                result.args.push(arg.to_string());
+                i += 1;
+            }
+        }
+    }
+
+    Some(result)
 }
 
 fn main() {
@@ -155,21 +236,83 @@ fn main() {
             continue;
         }
 
-        let command_str = tokens[0].as_str();
-        let args = tokens[1..]
+        let tokenized = handle_tokens(tokens);
+        if tokenized.is_none() {
+            continue;
+        }
+        let tokenized = tokenized.unwrap();
+        let command_str = tokenized.command.as_str();
+        let args_str = tokenized
+            .args
             .iter()
             .map(|s| s.as_str())
             .collect::<Vec<&str>>();
-        let args_str = args.as_slice();
+        let redirect_stdout = tokenized.redirect_stdout;
+        let redirect_stderr = tokenized.redirect_stderr;
+
+        let mut out_writer: Box<dyn Write> = if let Some(ref path) = redirect_stdout {
+            Box::new(File::create(Path::new(path)).unwrap())
+        } else {
+            Box::new(io::stdout())
+        };
+
+        let mut err_writer: Box<dyn Write> = if let Some(ref path) = redirect_stderr {
+            Box::new(File::create(Path::new(path)).unwrap())
+        } else {
+            Box::new(io::stderr())
+        };
+
+        let mut output = Output::new();
 
         match search_command(command_str) {
             Some(Command::BuiltinCommand(builtin)) => {
                 let command_fn = builtin.to_impl();
-                command_fn(args_str);
+                command_fn(&args_str, &mut output);
+                for line in output.get() {
+                    if line.is_err {
+                        writeln!(err_writer, "{}", line.line).unwrap();
+                    } else {
+                        writeln!(out_writer, "{}", line.line).unwrap();
+                    }
+                }
             }
             Some(Command::ExecutableCommand(_)) => {
                 if std::process::Command::new(command_str)
                     .args(args_str)
+                    .stdout(if let Some(path) = redirect_stdout {
+                        let path_clone = path.clone();
+                        match std::fs::OpenOptions::new()
+                            .write(true)
+                            .create(true)
+                            .truncate(true)
+                            .open(&path)
+                        {
+                            Ok(file) => std::process::Stdio::from(file),
+                            Err(e) => {
+                                eprintln!("Error opening output file {}: {}", path_clone, e);
+                                return;
+                            }
+                        }
+                    } else {
+                        std::process::Stdio::inherit()
+                    })
+                    .stderr(if let Some(path) = redirect_stderr {
+                        let path_clone = path.clone();
+                        match std::fs::OpenOptions::new()
+                            .write(true)
+                            .create(true)
+                            .truncate(true)
+                            .open(&path)
+                        {
+                            Ok(file) => std::process::Stdio::from(file),
+                            Err(e) => {
+                                eprintln!("Error opening error file {}: {}", path_clone, e);
+                                return;
+                            }
+                        }
+                    } else {
+                        std::process::Stdio::inherit()
+                    })
                     .spawn()
                     .and_then(|mut child| child.wait())
                     .is_err()
@@ -181,5 +324,7 @@ fn main() {
                 println!("{}: command not found", command_str);
             }
         }
+
+        output.clear();
     }
 }
