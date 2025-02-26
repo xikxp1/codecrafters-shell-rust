@@ -87,20 +87,20 @@ fn search_command(command: &str) -> Option<Command> {
         for path in path_var.split(':') {
             let command_path = format!("{}/{}", path, command);
             let path = std::path::Path::new(&command_path);
-            
+
             // Check if file exists, is a file, and is executable
             if path.exists() && path.is_file() {
                 if let Ok(metadata) = path.metadata() {
                     if metadata.permissions().mode() & 0o111 != 0 {
                         return Some(Command::ExecutableCommand(ExecutableCommand {
-                            path: command_path
+                            path: command_path,
                         }));
                     }
                 }
             }
         }
     }
-    
+
     None
 }
 
@@ -118,24 +118,24 @@ fn main() {
         if tokens.is_empty() {
             continue;
         }
-        
+
         let command_str = tokens[0];
         let args_str = &tokens[1..];
-        
+
         match search_command(command_str) {
             Some(Command::BulitinCommand(builtin)) => {
                 let command_fn = builtin.to_impl();
                 command_fn(args_str);
             }
-            Some(Command::ExecutableCommand(executable)) => {
-                // let command = std::process::Command::new(&executable.path)
-                //     .args(args_str)
-                //     .spawn();
-                // if command.is_err() {
-                //     println!("{}: command not found", command_str);
-                //     continue;
-                // }
-                // let _ = command.unwrap().wait();
+            Some(Command::ExecutableCommand(_)) => {
+                let command = std::process::Command::new(command_str)
+                    .args(args_str)
+                    .spawn();
+                if command.is_err() {
+                    println!("{}: command not found", command_str);
+                    continue;
+                }
+                let _ = command.unwrap().wait();
             }
             None => {
                 println!("{}: command not found", command_str);
