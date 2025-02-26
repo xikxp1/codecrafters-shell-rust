@@ -11,6 +11,7 @@ enum BulitinCommand {
     Exit,
     Echo,
     Type,
+    Pwd,
 }
 
 impl BulitinCommand {
@@ -19,6 +20,7 @@ impl BulitinCommand {
             "exit" => Some(Self::Exit),
             "echo" => Some(Self::Echo),
             "type" => Some(Self::Type),
+            "pwd" => Some(Self::Pwd),
             _ => None,
         }
     }
@@ -28,6 +30,7 @@ impl BulitinCommand {
             Self::Exit => exit_fn,
             Self::Echo => echo_fn,
             Self::Type => type_fn,
+            Self::Pwd => pwd_fn,
         }
     }
 }
@@ -74,6 +77,19 @@ fn type_fn(args: &[&str]) {
             println!("{}: not found", args[0]);
         }
     }
+}
+
+fn pwd_fn(args: &[&str]) {
+    if !args.is_empty() {
+        println!("pwd: too many arguments");
+        return;
+    }
+    let current_dir = std::env::current_dir();
+    if current_dir.is_err() {
+        println!("pwd: unable to get current directory");
+        return;
+    }
+    println!("{}", current_dir.unwrap().display());
 }
 
 fn search_command(command: &str) -> Option<Command> {
