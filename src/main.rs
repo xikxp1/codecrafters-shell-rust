@@ -26,6 +26,9 @@ fn main() {
                 };
                 std::process::exit(exit_code);
             }
+            "echo" => {
+                println!("{}", args.join(" "));
+            }
             _ => {
                 println!("{}: command not found", command);
             }
