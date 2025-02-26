@@ -11,6 +11,7 @@ enum BulitinCommand {
     Echo,
     Type,
     Pwd,
+    Cd,
 }
 
 impl BulitinCommand {
@@ -20,6 +21,7 @@ impl BulitinCommand {
             "echo" => Some(Self::Echo),
             "type" => Some(Self::Type),
             "pwd" => Some(Self::Pwd),
+            "cd" => Some(Self::Cd),
             _ => None,
         }
     }
@@ -30,6 +32,7 @@ impl BulitinCommand {
             Self::Echo => echo_fn,
             Self::Type => type_fn,
             Self::Pwd => pwd_fn,
+            Self::Cd => cd_fn,
         }
     }
 }
@@ -89,6 +92,27 @@ fn pwd_fn(args: &[&str]) {
         return;
     }
     println!("{}", current_dir.unwrap().display());
+}
+
+fn cd_fn(args: &[&str]) {
+    if args.len() > 1 {
+        println!("cd: too many arguments");
+        return;
+    }
+    let new_dir = if args.is_empty() {
+        std::env::var("HOME")
+    } else {
+        Ok(args[0].to_string())
+    };
+    if new_dir.is_err() {
+        println!("cd: unable to get home directory");
+        return;
+    }
+    let new_dir = new_dir.unwrap();
+    let result = std::env::set_current_dir(&new_dir);
+    if result.is_err() {
+        println!("cd: {}: No such file or directory", new_dir);
+    }
 }
 
 fn search_command(command: &str) -> Option<Command> {
