@@ -1,6 +1,5 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-use std::{fs::File, path::Path};
 
 enum Command {
     BuiltinCommand(BuiltinCommand),
@@ -126,6 +125,17 @@ fn pwd_fn(args: &[&str], output: &mut Output) {
 }
 
 fn cd_fn(args: &[&str], output: &mut Output) {
+    if args.is_empty() {
+        // If no args provided, change to HOME directory
+        if let Ok(home) = std::env::var("HOME") {
+            if let Err(_) = std::env::set_current_dir(&home) {
+                output.add(&format!("cd: {}: No such file or directory", home), true);
+            }
+        } else {
+            output.add("cd: unable to get home directory", true);
+        }
+        return;
+    }
     if args.len() > 1 {
         output.add("cd: too many arguments", true);
         return;
@@ -167,7 +177,9 @@ struct TokenizerResult {
     command: String,
     args: Vec<String>,
     redirect_stdout: Option<String>,
+    append_stdout: bool,
     redirect_stderr: Option<String>,
+    append_stderr: bool,
 }
 
 fn handle_tokens(tokens: Vec<String>) -> Option<TokenizerResult> {
@@ -180,7 +192,9 @@ fn handle_tokens(tokens: Vec<String>) -> Option<TokenizerResult> {
         command: command_str.to_string(),
         args: Vec::new(),
         redirect_stdout: None,
+        append_stdout: false,
         redirect_stderr: None,
+        append_stderr: false,
     };
 
     let mut i = 1;
@@ -200,6 +214,24 @@ fn handle_tokens(tokens: Vec<String>) -> Option<TokenizerResult> {
                     return None;
                 }
                 result.redirect_stderr = Some(tokens[i + 1].to_string());
+                i += 2;
+            }
+            ">>" | "1>>" => {
+                if i + 1 >= tokens.len() {
+                    eprintln!("syntax error: missing file name after redirection operator");
+                    return None;
+                }
+                result.redirect_stdout = Some(tokens[i + 1].to_string());
+                result.append_stdout = true;
+                i += 2;
+            }
+            "2>>" => {
+                if i + 1 >= tokens.len() {
+                    eprintln!("syntax error: missing file name after redirection operator");
+                    return None;
+                }
+                result.redirect_stderr = Some(tokens[i + 1].to_string());
+                result.append_stderr = true;
                 i += 2;
             }
             arg => {
@@ -248,16 +280,53 @@ fn main() {
             .map(|s| s.as_str())
             .collect::<Vec<&str>>();
         let redirect_stdout = tokenized.redirect_stdout;
+        let append_stdout = tokenized.append_stdout;
         let redirect_stderr = tokenized.redirect_stderr;
+        let append_stderr = tokenized.append_stderr;
 
-        let mut out_writer: Box<dyn Write> = if let Some(ref path) = redirect_stdout {
-            Box::new(File::create(Path::new(path)).unwrap())
+        // Create base OpenOptions for output and error files
+        let mut base_out_options = std::fs::OpenOptions::new();
+        base_out_options.write(true).create(true);
+
+        let mut base_err_options = std::fs::OpenOptions::new();
+        base_err_options.write(true).create(true);
+
+        // Add mode-specific flags
+        if append_stdout {
+            base_out_options.append(true);
+        } else {
+            base_out_options.truncate(true);
+        }
+
+        if append_stderr {
+            base_err_options.append(true);
+        } else {
+            base_err_options.truncate(true);
+        }
+
+        let out_file = redirect_stdout.as_ref().map(|path| {
+            base_out_options.open(path).unwrap_or_else(|e| {
+                eprintln!("Error opening output file {}: {}", path, e);
+                std::process::exit(1);
+            })
+        });
+
+        let err_file = redirect_stderr.as_ref().map(|path| {
+            base_err_options.open(path).unwrap_or_else(|e| {
+                eprintln!("Error opening error file {}: {}", path, e);
+                std::process::exit(1);
+            })
+        });
+
+        // Create writers from the file handles
+        let mut out_writer: Box<dyn Write> = if let Some(file) = out_file {
+            Box::new(file)
         } else {
             Box::new(io::stdout())
         };
 
-        let mut err_writer: Box<dyn Write> = if let Some(ref path) = redirect_stderr {
-            Box::new(File::create(Path::new(path)).unwrap())
+        let mut err_writer: Box<dyn Write> = if let Some(file) = err_file {
+            Box::new(file)
         } else {
             Box::new(io::stderr())
         };
@@ -277,39 +346,24 @@ fn main() {
                 }
             }
             Some(Command::ExecutableCommand(_)) => {
+                // Reuse the base options we created earlier
                 if std::process::Command::new(command_str)
                     .args(args_str)
-                    .stdout(if let Some(path) = redirect_stdout {
-                        let path_clone = path.clone();
-                        match std::fs::OpenOptions::new()
-                            .write(true)
-                            .create(true)
-                            .truncate(true)
-                            .open(&path)
-                        {
-                            Ok(file) => std::process::Stdio::from(file),
-                            Err(e) => {
-                                eprintln!("Error opening output file {}: {}", path_clone, e);
-                                return;
-                            }
-                        }
+                    .stdout(if let Some(ref path) = redirect_stdout {
+                        let file = base_out_options.open(path).unwrap_or_else(|e| {
+                            eprintln!("Error opening output file {}: {}", path, e);
+                            std::process::exit(1);
+                        });
+                        std::process::Stdio::from(file)
                     } else {
                         std::process::Stdio::inherit()
                     })
-                    .stderr(if let Some(path) = redirect_stderr {
-                        let path_clone = path.clone();
-                        match std::fs::OpenOptions::new()
-                            .write(true)
-                            .create(true)
-                            .truncate(true)
-                            .open(&path)
-                        {
-                            Ok(file) => std::process::Stdio::from(file),
-                            Err(e) => {
-                                eprintln!("Error opening error file {}: {}", path_clone, e);
-                                return;
-                            }
-                        }
+                    .stderr(if let Some(ref path) = redirect_stderr {
+                        let file = base_err_options.open(path).unwrap_or_else(|e| {
+                            eprintln!("Error opening error file {}: {}", path, e);
+                            std::process::exit(1);
+                        });
+                        std::process::Stdio::from(file)
                     } else {
                         std::process::Stdio::inherit()
                     })
@@ -317,11 +371,11 @@ fn main() {
                     .and_then(|mut child| child.wait())
                     .is_err()
                 {
-                    println!("{}: command not found", command_str);
+                    eprintln!("{}: command not found", command_str);
                 }
             }
             None => {
-                println!("{}: command not found", command_str);
+                eprintln!("{}: command not found", command_str);
             }
         }
 
